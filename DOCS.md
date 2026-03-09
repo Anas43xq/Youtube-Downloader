@@ -28,9 +28,9 @@
 
 ```
 ┌─────────────────────────────────────────────┐
-│              Browser (localhost:3001)        │
+│              Browser (localhost:3001)       │
 │                                             │
-│  React SPA (Vite build served by Express)  │
+│  React SPA (Vite build served by Express)   │
 │                                             │
 │  VideoInput → App state → VideoPlayer       │
 │                        → TimelineSlider     │

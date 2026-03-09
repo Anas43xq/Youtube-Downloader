@@ -1,3 +1,5 @@
+// --- FILE: frontend/src/components/VideoPlayer.jsx ---
+
 import { useEffect, useRef, useState } from "react";
 
 function PlayIcon() {
@@ -8,7 +10,8 @@ function PlayIcon() {
   );
 }
 
-let ytApiLoaded = false;
+// ── YouTube IFrame API loader ─────────────────────────────────────────────────
+let ytApiLoaded    = false;
 let ytApiCallbacks = [];
 
 function loadYTApi(cb) {
@@ -16,8 +19,8 @@ function loadYTApi(cb) {
   ytApiCallbacks.push(cb);
   if (!ytApiLoaded) {
     ytApiLoaded = true;
-    const tag = document.createElement("script");
-    tag.src = "https://www.youtube.com/iframe_api";
+    const tag   = document.createElement("script");
+    tag.src     = "https://www.youtube.com/iframe_api";
     document.head.appendChild(tag);
     window.onYouTubeIframeAPIReady = () => {
       ytApiCallbacks.forEach((fn) => fn());
@@ -26,10 +29,18 @@ function loadYTApi(cb) {
   }
 }
 
+/**
+ * @param {{
+ *   videoId: string|null,
+ *   playerRef: React.MutableRefObject<{seekTo:(t:number)=>void}|null>,
+ *   onTimeUpdate: (t: number) => void,
+ *   onDurationChange: (d: number) => void
+ * }} props
+ */
 export default function VideoPlayer({ videoId, playerRef, onTimeUpdate, onDurationChange }) {
-  const containerRef = useRef(null);
-  const ytPlayerRef = useRef(null);
-  const timerRef = useRef(null);
+  const containerRef  = useRef(null);
+  const ytPlayerRef   = useRef(null);
+  const timerRef      = useRef(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -38,42 +49,44 @@ export default function VideoPlayer({ videoId, playerRef, onTimeUpdate, onDurati
       if (ytPlayerRef.current) {
         ytPlayerRef.current.destroy();
         ytPlayerRef.current = null;
+        if (playerRef) playerRef.current = null;
       }
       clearInterval(timerRef.current);
       return;
     }
 
-    const mountId = "yt-player-mount";
+    const MOUNT_ID = "yt-player-mount";
 
     function initPlayer() {
       if (ytPlayerRef.current) {
         ytPlayerRef.current.destroy();
         ytPlayerRef.current = null;
+        if (playerRef) playerRef.current = null;
       }
 
       const mount = document.createElement("div");
-      mount.id = mountId;
+      mount.id    = MOUNT_ID;
+
       if (containerRef.current) {
         containerRef.current.innerHTML = "";
         containerRef.current.appendChild(mount);
       }
 
-      ytPlayerRef.current = new window.YT.Player(mountId, {
+      ytPlayerRef.current = new window.YT.Player(MOUNT_ID, {
         videoId,
-        playerVars: {
-          autoplay: 0,
-          controls: 1,
-          rel: 0,
-          modestbranding: 1,
-        },
+        playerVars: { autoplay: 0, controls: 1, rel: 0, modestbranding: 1 },
         events: {
           onReady(e) {
             setReady(true);
             const dur = e.target.getDuration();
             onDurationChange(dur);
 
-            if (playerRef) playerRef.current = { seekTo: (t) => e.target.seekTo(t, true) };
+            // Wire playerRef so parent hooks can call seekTo
+            if (playerRef) {
+              playerRef.current = { seekTo: (t) => e.target.seekTo(t, true) };
+            }
 
+            // Poll current time every 500 ms
             clearInterval(timerRef.current);
             timerRef.current = setInterval(() => {
               if (ytPlayerRef.current?.getCurrentTime) {
@@ -92,7 +105,15 @@ export default function VideoPlayer({ videoId, playerRef, onTimeUpdate, onDurati
 
     loadYTApi(initPlayer);
 
-    return () => clearInterval(timerRef.current);
+    return () => {
+      clearInterval(timerRef.current);
+      if (ytPlayerRef.current) {
+        ytPlayerRef.current.destroy();
+        ytPlayerRef.current = null;
+      }
+      if (playerRef) playerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
 
   return (

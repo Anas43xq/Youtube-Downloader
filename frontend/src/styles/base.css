@@ -1,0 +1,52 @@
+/* --- FILE: frontend/src/styles/base.css --- */
+
+/* ─── Reset ──────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ─── CSS Variables ──────────────────────────────────────────── */
+:root {
+  --bg-base:        #0a0a0a;
+  --bg-panel:       #111111;
+  --bg-elevated:    #1a1a1a;
+  --bg-hover:       #222222;
+  --bg-input:       #1c1c1c;
+  --border:         #2a2a2a;
+  --border-active:  #444444;
+  --accent:         #e8ff00;
+  --accent-dim:     #b8cc00;
+  --text-primary:   #f0f0f0;
+  --text-secondary: #888888;
+  --text-muted:     #444444;
+  --red:            #ff3b3b;
+  --green:          #00e676;
+  --radius:         4px;
+  --font-mono:      'Space Mono', monospace;
+  --font-display:   'Barlow Condensed', sans-serif;
+}
+
+/* ─── Global ─────────────────────────────────────────────────── */
+html, body {
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar              { width: 6px; }
+::-webkit-scrollbar-track        { background: var(--bg-base); }
+::-webkit-scrollbar-thumb        { background: var(--border-active); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: var(--text-muted); }

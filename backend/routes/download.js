@@ -1,57 +1,56 @@
+// --- FILE: backend/routes/download.js ---
 "use strict";
 
 const express = require("express");
-const router = express.Router();
-const path = require("path");
-const fs = require("fs");
-const { downloadVideo } = require("../services/youtubeService");
+const router  = express.Router();
+const path    = require("path");
+const fs      = require("fs");
 
-/**
- * GET /api/download?url=<youtube_url>&quality=<360|480|720|1080>
- * Streams the video file back to the client.
- */
-router.get("/", async (req, res, next) => {
-  const { url, quality } = req.query;
+const validateUrl                                        = require("../middleware/validateUrl");
+const { validateQuality, validateMode, validateFormats } = require("../middleware/validateParams");
+const { downloadVideo }                                  = require("../services/youtubeService");
 
-  if (!url) {
-    return res.status(400).json({ error: "Missing required query parameter: url" });
-  }
+router.get("/", validateUrl, validateQuality, validateMode, validateFormats, async (req, res, next) => {
+  const {
+    url,
+    quality        = "720",
+    mode           = "video",
+    videoFormat    = "mp4",
+    audioFormat    = "mp3",
+    startTime,
+    endTime,
+    customFilename = "",
+  } = req.query;
 
-  const selectedQuality = quality || "720";
-  const allowedQualities = ["360", "480", "720", "1080"];
-  if (!allowedQualities.includes(selectedQuality)) {
-    return res.status(400).json({
-      error: `Invalid quality. Must be one of: ${allowedQualities.join(", ")}`,
-    });
-  }
+  const startSecs = Math.max(0, parseFloat(startTime) || 0);
+  const endSecs   = endTime != null ? parseFloat(endTime) : null;
 
-  const startTimeSecs = Math.max(0, parseFloat(req.query.startTime) || 0);
-  const endTimeSecs = req.query.endTime != null ? parseFloat(req.query.endTime) : null;
-
-  // ── Validate optional custom output directory ──────────────────────────────
+  // Validate optional output directory
   let validatedOutputDir = null;
   if (req.query.outputDir) {
     const raw = req.query.outputDir.trim();
-    if (raw.includes("\0")) {
-      return res.status(400).json({ error: "Invalid output directory" });
-    }
+    if (raw.includes("\0")) return res.status(400).json({ error: "Invalid output directory" });
     const normalized = path.normalize(raw);
-    if (!path.isAbsolute(normalized)) {
-      return res.status(400).json({ error: "Output directory must be an absolute path" });
-    }
-    try {
-      fs.mkdirSync(normalized, { recursive: true });
-    } catch (e) {
-      return res.status(400).json({ error: `Cannot create output directory: ${e.message}` });
+    if (!path.isAbsolute(normalized)) return res.status(400).json({ error: "Output directory must be absolute" });
+    try { fs.mkdirSync(normalized, { recursive: true }); } catch (e) {
+      return res.status(400).json({ error: "Cannot create output directory: " + e.message });
     }
     validatedOutputDir = normalized;
   }
 
+  // Sanitize optional custom filename
+  const safeFilename = customFilename
+    ? String(customFilename).replace(/\0/g, "").replace(/[\/\\]/g, "_").substring(0, 200).trim()
+    : "";
+
   try {
-    const { filename } = await downloadVideo(url, selectedQuality, startTimeSecs, endTimeSecs, validatedOutputDir);
-    res.json({ success: true, filename });
+    const { filename, filePath } = await downloadVideo(
+      url, quality, mode, videoFormat, audioFormat,
+      startSecs, endSecs, validatedOutputDir, safeFilename,
+    );
+    res.json({ success: true, filename, filePath });
   } catch (err) {
-    console.error("[DOWNLOAD] Error:", err.message);
+    console.error("[DOWNLOAD]", err.message);
     next(err);
   }
 });

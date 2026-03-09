@@ -1,25 +1,21 @@
+// --- FILE: backend/routes/info.js ---
 "use strict";
 
-const express = require("express");
-const router = express.Router();
+const express      = require("express");
+const router       = express.Router();
+const validateUrl  = require("../middleware/validateUrl");
 const { getVideoInfo } = require("../services/youtubeService");
 
 /**
  * GET /api/info?url=<youtube_url>
- * Returns basic video metadata: title, duration, thumbnail, formats.
+ * Returns VideoInfo JSON: title, duration, thumbnail, availableQualities, isShort.
  */
-router.get("/", async (req, res, next) => {
-  const { url } = req.query;
-
-  if (!url) {
-    return res.status(400).json({ error: "Missing required query parameter: url" });
-  }
-
+router.get("/", validateUrl, async (req, res, next) => {
   try {
-    const info = await getVideoInfo(url);
+    const info = await getVideoInfo(req.query.url);
     res.json(info);
   } catch (err) {
-    console.error("[INFO] Error fetching video info:", err.message);
+    console.error("[INFO]", err.message);
     next(err);
   }
 });

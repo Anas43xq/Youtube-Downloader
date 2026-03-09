@@ -1,61 +1,34 @@
+// --- FILE: backend/services/youtubeService.js ---
 "use strict";
 
 const YTDlpWrap = require("yt-dlp-wrap").default;
-const path = require("path");
-const os = require("os");
+const path      = require("path");
+
+const { YTDLP_PATH }       = require("../config/index");
+const { DOWNLOADS_DIR }    = require("../config/paths");
+const { buildArgs }        = require("../utils/ytdlArgs");
+const { parseProgressLine, isMerging } = require("../utils/parseProgress");
+const { sanitizeFilename } = require("../utils/sanitize");
+const { formatDuration }   = require("../utils/formatDuration");
 
 // ─── Init yt-dlp-wrap ────────────────────────────────────────────────────────
-// Uses the system `yt-dlp` binary in PATH.
-const ytDlp = new YTDlpWrap();
+const ytDlp = YTDLP_PATH ? new YTDlpWrap(YTDLP_PATH) : new YTDlpWrap();
 
-// ─── Default Downloads Directory ─────────────────────────────────────────────
-const DOWNLOADS_DIR = path.join(os.homedir(), "Downloads");
-
-// ─── Quality Format Selector ─────────────────────────────────────────────────
-function buildFormatSelector(quality) {
-  const q = parseInt(quality, 10);
-  return [
-    `bestvideo[height<=${q}][ext=mp4]+bestaudio[ext=m4a]/`,
-    `bestvideo[height<=${q}]+bestaudio/`,
-    `best[height<=${q}][ext=mp4]/`,
-    `best[height<=${q}]/`,
-    `best[ext=mp4]/`,
-    `best`,
-  ].join("");
+// ─── Extension lookup ─────────────────────────────────────────────────────────
+function getOutputExt(mode, videoFormat, audioFormat) {
+  if (mode === "audio")        return audioFormat || "mp3";
+  if (mode === "social_audio") return "mp3";
+  if (mode === "social_video") return "mp4";
+  return videoFormat || "mp4";
 }
 
-// ─── Sanitize filename ───────────────────────────────────────────────────────
-function sanitizeFilename(name) {
-  return name
-    .replace(/[/\\?%*:|"<>]/g, "_")
-    .replace(/\s+/g, "_")
-    .substring(0, 120);
-}
-
-// ─── Format duration ─────────────────────────────────────────────────────────
-function formatDuration(seconds) {
-  if (!seconds) return null;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return [h, m, s].map((v) => String(v).padStart(2, "0")).join(":");
-}
-
-// ─── Format seconds as HH:MM:SS for yt-dlp sections ─────────────────────────
-function formatSectionTime(secs) {
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
-  return [h, m, s].map((v) => String(v).padStart(2, "0")).join(":");
-}
-
-// ─── getVideoInfo ────────────────────────────────────────────────────────────
+// ─── getVideoInfo ─────────────────────────────────────────────────────────────
 async function getVideoInfo(url) {
   let metadata;
   try {
     metadata = await ytDlp.getVideoInfo(url);
   } catch (err) {
-    throw new Error(`yt-dlp failed to fetch info: ${err.message}`);
+    throw new Error("yt-dlp failed to fetch info: " + err.message);
   }
 
   const formats = metadata.formats || [];
@@ -69,66 +42,62 @@ async function getVideoInfo(url) {
   ];
 
   return {
-    title: metadata.title || "Unknown Title",
-    duration: formatDuration(metadata.duration),
-    durationSeconds: metadata.duration || 0,
-    thumbnail: metadata.thumbnail || null,
-    uploader: metadata.uploader || null,
-    viewCount: metadata.view_count || null,
+    title:              metadata.title     || "Unknown Title",
+    duration:           formatDuration(metadata.duration),
+    durationSeconds:    metadata.duration  || 0,
+    thumbnail:          metadata.thumbnail || null,
+    uploader:           metadata.uploader  || null,
+    viewCount:          metadata.view_count || null,
     availableQualities: availableHeights.map(String),
+    isShort:            url.includes("/shorts/"),
   };
 }
 
-// ─── downloadVideo ───────────────────────────────────────────────────────────
-async function downloadVideo(url, quality, startTime = 0, endTime = null, outputDir = null) {
-  const formatSelector = buildFormatSelector(quality);
-  const isClip = startTime > 0 || endTime !== null;
-
+// ─── downloadVideo ────────────────────────────────────────────────────────────
+/**
+ * Legacy promise-based download — saves directly to DOWNLOADS_DIR / outputDir.
+ * Used by the legacy /api/download route.
+ */
+async function downloadVideo(
+  url,
+  quality       = "720",
+  mode          = "video",
+  videoFormat   = "mp4",
+  audioFormat   = "mp3",
+  startTime     = 0,
+  endTime       = null,
+  outputDir     = null,
+  customFilename = "",
+) {
   let title = "video";
   try {
     const meta = await ytDlp.getVideoInfo(url);
     title = sanitizeFilename(meta.title || "video");
-  } catch (_) {
-    // Non-fatal — use generic filename
-  }
+  } catch { /* use generic */ }
 
-  // Use a unique filename for clips to avoid colliding with the full video
+  const ext = getOutputExt(mode, videoFormat, audioFormat);
   let filename;
-  if (isClip) {
-    const startTag = formatSectionTime(startTime).replace(/:/g, "-");
-    const endTag   = endTime !== null ? formatSectionTime(endTime).replace(/:/g, "-") : "end";
-    filename = `${title}_${quality}p_${startTag}_${endTag}.mp4`;
+
+  if (customFilename && customFilename.trim()) {
+    filename = sanitizeFilename(customFilename.trim());
+    if (!filename.toLowerCase().endsWith("." + ext)) {
+      filename = filename.replace(/\.[^.]+$/, "") + "." + ext;
+    }
+  } else if (mode === "audio") {
+    filename = title + "_audio." + ext;
   } else {
-    filename = `${title}_${quality}p.mp4`;
+    filename = title + "_" + quality + "p." + ext;
   }
 
   const outputPath = path.join(outputDir || DOWNLOADS_DIR, filename);
-
-  const args = [
-    url,
-    "-f", formatSelector,
-    "--merge-output-format", "mp4",
-    "-o", outputPath,
-    "--no-playlist",
-    "--force-overwrites",          // always overwrite — never skip
-    "--concurrent-fragments", "8",
-    "--buffer-size", "16K",
-    "--http-chunk-size", "10M",
-  ];
-
-  if (isClip) {
-    const start = formatSectionTime(startTime);
-    const end   = endTime !== null ? formatSectionTime(endTime) : "99:59:59";
-    args.push("--download-sections", `*${start}-${end}`);
-    args.push("--force-keyframes-at-cuts");
-  }
+  const args = buildArgs({ url, quality, mode, videoFormat, audioFormat, outputPath, startTime, endTime });
 
   try {
     await ytDlp.execPromise(args);
   } catch (err) {
     const msg = err.message || "";
     if (msg.includes("ffmpeg is not installed")) {
-      throw new Error("ffmpeg is required for clipping. Install it from https://ffmpeg.org/download.html and add it to your PATH, then restart the server.");
+      throw new Error("ffmpeg is required. Install it and add it to PATH.");
     }
     throw err;
   }
@@ -136,4 +105,76 @@ async function downloadVideo(url, quality, startTime = 0, endTime = null, output
   return { filePath: outputPath, filename };
 }
 
-module.exports = { getVideoInfo, downloadVideo, DOWNLOADS_DIR };
+// ─── downloadWithProgress ─────────────────────────────────────────────────────
+/**
+ * Start a download with granular progress callbacks for the SSE route.
+ *
+ * opts.outputPath must be the full absolute file path (route pre-computes it).
+ * Args are built via ytdlArgs.buildArgs with --quiet replaced by --newline so
+ * yt-dlp outputs one progress line per tick.
+ */
+function downloadWithProgress({
+  url,
+  quality       = "720",
+  mode          = "video",
+  videoFormat   = "mp4",
+  audioFormat   = "mp3",
+  startTime     = 0,
+  endTime       = null,
+  outputPath,
+  onProgress,
+  onMerging,
+  onComplete,
+  onError,
+}) {
+  // Replace --quiet with --newline so stdout delivers live progress lines
+  const rawArgs = buildArgs({ url, quality, mode, videoFormat, audioFormat, outputPath, startTime, endTime });
+  const args    = rawArgs.filter((a) => a !== "--quiet").concat(["--newline"]);
+
+  let finished     = false;
+  let mergingFired = false;
+
+  function finish(err) {
+    if (finished) return;
+    finished = true;
+    if (err) onError(err); else onComplete();
+  }
+
+  let emitter;
+  try {
+    emitter = ytDlp.exec(args);
+  } catch (err) {
+    onError(err);
+    return;
+  }
+
+  // yt-dlp-wrap emits each stdout line as ytDlpEvent(type, data)
+  emitter.on("ytDlpEvent", (eventType, eventData) => {
+    const line = eventType ? "[" + eventType + "] " + eventData : eventData;
+
+    if (!mergingFired && isMerging(line)) {
+      mergingFired = true;
+      onMerging();
+      return;
+    }
+
+    const progress = parseProgressLine(line);
+    if (progress) onProgress(progress);
+  });
+
+  emitter.on("close", (code) => {
+    if (code !== 0 && code !== null) {
+      finish(new Error("yt-dlp exited with code " + code));
+    } else {
+      finish(null);
+    }
+  });
+
+  emitter.on("error", (err) => {
+    finish(err instanceof Error ? err : new Error(String(err)));
+  });
+}
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
+
+module.exports = { getVideoInfo, downloadVideo, downloadWithProgress };

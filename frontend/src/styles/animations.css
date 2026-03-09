@@ -1,0 +1,34 @@
+/* --- FILE: frontend/src/styles/animations.css --- */
+
+/* ─── Spin (spinner) ─────────────────────────────────────────── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Fade-in (format/mode sub-rows) ─────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fadeIn {
+  animation: fadeIn 0.15s ease;
+}
+/* ─── Indeterminate progress bar ─────────────────────────────── */
+@keyframes indeterminate {
+  0%   { transform: translateX(-150%); }
+  100% { transform: translateX(350%); }
+}
+
+/* ─── Slide down (expandable panels) ────────────────────────── */
+@keyframes slideDown {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 2000px; }
+}
+.slideDown {
+  animation: slideDown 0.15s ease;
+}
+/* ─── Pulse (status indicators) ─────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}

@@ -17,6 +17,7 @@ frontend/.vite/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+DOCS.md
 
 # OS
 .DS_Store

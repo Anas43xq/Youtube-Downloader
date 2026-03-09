@@ -1,79 +1,134 @@
-import { useState, useRef, useCallback, useEffect } from "react";
-import VideoInput from "./components/VideoInput.jsx";
-import VideoPlayer from "./components/VideoPlayer.jsx";
-import TimelineSlider from "./components/TimelineSlider.jsx";
-import QualitySelector from "./components/QualitySelector.jsx";
-import DownloadButton from "./components/DownloadButton.jsx";
+// --- FILE: frontend/src/App.jsx ---
 
-// In production the frontend is served by the backend on the same origin.
-// In dev, Vite runs on a separate port so we point explicitly to the backend.
-const BACKEND = import.meta.env.VITE_BACKEND_URL ?? "";
+import { useState, useCallback, useMemo } from "react";
 
-function FolderIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-muted)", flexShrink: 0 }}>
-      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-    </svg>
-  );
-}
+// ── Hooks ─────────────────────────────────────────────────────────────────────
+import useVideoInfo      from "./hooks/useVideoInfo.js";
+import usePlayer        from "./hooks/usePlayer.js";
+import useSettings      from "./hooks/useSettings.js";
+import useDownloadQueue  from "./hooks/useDownloadQueue.js";
+import useDownloadHistory from "./hooks/useDownloadHistory.js";
 
-function extractVideoId(url) {
-  try {
-    const u = new URL(url);
-    if (u.hostname === "youtu.be") return u.pathname.slice(1).split("?")[0];
-    return u.searchParams.get("v") || null;
-  } catch {
-    return null;
-  }
-}
+// ── Utils / constants ─────────────────────────────────────────────────────────
+import { extractVideoId }               from "./utils/extractVideoId.js";
+import { resolveFilename }              from "./utils/resolveFilename.js";
+import { MODES, isSocialMode }          from "./constants/modes.js";
+import { DEFAULT_QUALITY }              from "./constants/qualities.js";
+import { DEFAULT_VIDEO_FORMAT, DEFAULT_AUDIO_FORMAT } from "./constants/formats.js";
+
+// ── Components ────────────────────────────────────────────────────────────────
+import UrlInputBar         from "./components/controls/UrlInputBar.jsx";
+import VideoMetaBar        from "./components/player/VideoMetaBar.jsx";
+import VideoPlayer         from "./components/VideoPlayer.jsx";
+import TimelineSlider      from "./components/TimelineSlider.jsx";
+import ClipRangeSelector   from "./components/clip/ClipRangeSelector.jsx";
+import QualitySelector     from "./components/controls/QualitySelector.jsx";
+import VideoFormatSelector from "./components/controls/VideoFormatSelector.jsx";
+import ModeSelector        from "./components/controls/ModeSelector.jsx";
+import FilenameInput       from "./components/controls/FilenameInput.jsx";
+import DownloadButton      from "./components/download/DownloadButton.jsx";
+import Divider             from "./components/common/Divider.jsx";
+import QueuePanel          from "./components/queue/QueuePanel.jsx";
+import HistoryPanel        from "./components/history/HistoryPanel.jsx";
+
+// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  // Controlled URL field — lives here so UrlInputBar + hooks can share it
   const [url, setUrl] = useState("");
-  const [videoId, setVideoId] = useState(null);
-  const [videoInfo, setVideoInfo] = useState(null);
-  const [quality, setQuality] = useState("720");
-  const [status, setStatus] = useState(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [startTime, setStartTime] = useState(0);
-  const [endTime, setEndTime] = useState(0);
-  const [outputDir, setOutputDir] = useState("");
-  const [defaultOutputDir, setDefaultOutputDir] = useState("");
-  const playerRef = useRef(null);
 
-  useEffect(() => {
-    fetch(`${BACKEND}/api/config`)
-      .then((r) => r.json())
-      .then((d) => setDefaultOutputDir(d.defaultOutputDir || ""))
-      .catch(() => {});
-  }, [BACKEND]);
+  // ── Domain hooks ─────────────────────────────────────────────────────────
+  const {
+    videoInfo, status: infoStatus, errorMsg, loadVideo,
+  } = useVideoInfo();
 
-  const handleLoad = useCallback(async () => {
-    const id = extractVideoId(url.trim());
-    if (!id) {
-      setStatus({ type: "error", msg: "Invalid YouTube URL — paste a valid link." });
-      return;
-    }
+  const {
+    currentTime, duration, startTime, endTime,
+    playerRef, updateCurrentTime, setDuration, setStartTime, setEndTime, seek,
+  } = usePlayer();
 
-    setStatus({ type: "loading", msg: "Fetching video info…" });
-    setVideoId(null);
-    setVideoInfo(null);
-    setCurrentTime(0);
-    setDuration(0);
+  const {
+    quality, mode, videoFormat, audioFormat, filenameTemplate,
+    setQuality, setMode, setVideoFormat, setAudioFormat, setFilenameTemplate,
+  } = useSettings();
+
+  // History must be declared before queue so addEntry is available for onItemComplete
+  const {
+    history, addEntry, removeEntry, clearHistory, reDownload,
+  } = useDownloadHistory();
+
+  const {
+    queue, isRunning, addToQueue, removeFromQueue, clearDone, downloadAll,
+  } = useDownloadQueue({
+    onItemComplete: (item) => {
+      addEntry({
+        id:           item.id,
+        url:          item.url,
+        title:        item.title,
+        filename:     item.filename   || null,
+        quality:      item.quality,
+        mode:         item.mode,
+        videoFormat:  item.videoFormat,
+        audioFormat:  item.audioFormat,
+        filesize:     item.filesize   || null,
+        downloadedAt: Date.now(),
+      });
+    },
+  });
+
+  // ── Derived state ─────────────────────────────────────────────────────────
+
+  // videoId is only valid while the info fetch succeeded for the current url
+  const videoId = infoStatus === "ok" && videoInfo ? extractVideoId(url) : null;
+
+  // Live filename preview (empty when no template)
+  const filenamePreview = useMemo(() => {
+    if (!filenameTemplate.trim()) return "";
+    return resolveFilename(filenameTemplate, {
+      title:  videoInfo?.title || "",
+      quality,
+      format: mode === MODES.AUDIO ? audioFormat : videoFormat,
+      mode,
+      url,
+    });
+  }, [filenameTemplate, quality, mode, videoFormat, audioFormat, videoInfo, url]);
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+
+  const handleLoad = useCallback(() => {
+    // Reset settings before loading so controls start fresh
+    setMode(MODES.VIDEO);
+    setQuality(DEFAULT_QUALITY);
+    setVideoFormat(DEFAULT_VIDEO_FORMAT);
+    setAudioFormat(DEFAULT_AUDIO_FORMAT);
+    setFilenameTemplate("");
     setStartTime(0);
     setEndTime(0);
 
-    try {
-      const res = await fetch(`${BACKEND}/api/info?url=${encodeURIComponent(url.trim())}`);
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      const data = await res.json();
-      setVideoInfo(data);
-      setVideoId(id);
-      setStatus({ type: "ok", msg: `Loaded: ${data.title}` });
-    } catch (err) {
-      setStatus({ type: "error", msg: `Failed to fetch info: ${err.message}` });
-    }
-  }, [url]);
+    loadVideo(url.trim());
+  }, [
+    url, loadVideo,
+    setMode, setQuality, setVideoFormat, setAudioFormat,
+    setFilenameTemplate, setStartTime, setEndTime,
+  ]);
+
+  function handleAddToQueue() {
+    addToQueue(videoInfo, url, {
+      quality,
+      mode,
+      videoFormat,
+      audioFormat,
+      startTime,
+      endTime,
+      fileDuration:     duration,
+      filenameTemplate,
+    });
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const isLoading = infoStatus === "loading";
+  const hasVideo  = !!videoId;
 
   return (
     <div className="app">
@@ -83,88 +138,123 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        {/* Input Panel */}
+
+        {/* ── Panel 1: URL input ─────────────────────────────────────────── */}
         <div className="panel">
-          <div className="panel-label">Video Source</div>
-          <VideoInput
+          <UrlInputBar
             url={url}
             onChange={setUrl}
             onLoad={handleLoad}
-            loading={status?.type === "loading"}
+            loading={isLoading}
           />
-          {status && (
-            <div className={`status-bar ${status.type}`}>
+
+          {(infoStatus === "error" || infoStatus === "ok") && (
+            <div className={`status-bar ${infoStatus === "error" ? "error" : "ok"}`}>
               <span className="status-dot" />
-              {status.type === "loading" && <span className="spinner" style={{ marginRight: 4 }} />}
-              {status.msg}
+              {infoStatus === "error"
+                ? errorMsg
+                : `Loaded: ${videoInfo?.title}`}
             </div>
           )}
         </div>
 
-        {/* Player Panel */}
+        {/* ── Panel 2: Player + controls ─────────────────────────────────── */}
         <div className="panel">
-          {videoInfo && (
-            <div className="video-meta">
-              <span className="video-title">{videoInfo.title}</span>
-              {videoInfo.duration && (
-                <span className="video-badge">{videoInfo.duration}</span>
-              )}
-            </div>
-          )}
+          <VideoMetaBar videoInfo={videoInfo} />
+
           <VideoPlayer
             videoId={videoId}
             playerRef={playerRef}
-            onTimeUpdate={setCurrentTime}
-            onDurationChange={(d) => { setDuration(d); setEndTime(d); }}
+            onTimeUpdate={updateCurrentTime}
+            onDurationChange={setDuration}
           />
+
           <div className="controls-strip">
+            {/* Timeline scrubber */}
             <TimelineSlider
               currentTime={currentTime}
               duration={duration}
               startTime={startTime}
               endTime={endTime}
+              onSeek={seek}
+            />
+
+            <Divider />
+
+            {/* Clip range inputs */}
+            <ClipRangeSelector
+              startTime={startTime}
+              endTime={endTime}
+              duration={duration}
               onStartChange={setStartTime}
               onEndChange={setEndTime}
-              onSeek={(t) => {
-                setCurrentTime(t);
-                if (playerRef.current?.seekTo) {
-                  playerRef.current.seekTo(t, true);
-                }
-              }}
             />
-            <div className="controls-divider" />
-            <div className="quality-row">
-              <span className="quality-label">Quality</span>
-              <QualitySelector quality={quality} onChange={setQuality} />
-            </div>
-            <div className="controls-divider" />
-            <div className="folder-row">
-              <span className="quality-label">Output Folder</span>
-              <FolderIcon />
-              <input
-                className="folder-input"
-                type="text"
-                value={outputDir}
-                onChange={(e) => setOutputDir(e.target.value)}
-                placeholder={defaultOutputDir || "Default downloads folder"}
-                spellCheck={false}
-              />
-            </div>
-            <div className="controls-divider" />
-            <div className="download-row">
-              <DownloadButton
-                disabled={!videoId}
-                url={url}
-                quality={quality}
-                backendUrl={BACKEND}
-                startTime={startTime}
-                endTime={endTime}
-                duration={duration}
-                outputDir={outputDir.trim()}
-              />
-            </div>
+
+            <Divider />
+
+            {/* Quality — hidden in social modes */}
+            <QualitySelector
+              quality={quality}
+              onChange={setQuality}
+              hidden={isSocialMode(mode)}
+            />
+
+            {/* Video format — visible only in video mode */}
+            <VideoFormatSelector
+              videoFormat={videoFormat}
+              onChange={setVideoFormat}
+              hidden={mode !== MODES.VIDEO}
+            />
+
+            <Divider />
+
+            {/* Mode + format sub-row */}
+            <ModeSelector
+              mode={mode}
+              onModeChange={setMode}
+              audioFormat={audioFormat}
+              onFormatChange={setAudioFormat}
+            />
+
+            {/* Filename template */}
+            <FilenameInput
+              template={filenameTemplate}
+              onChange={setFilenameTemplate}
+              preview={filenamePreview}
+              mode={mode}
+            />
+
+            <Divider />
+
+            {/* Download / Add-to-queue */}
+            <DownloadButton
+              disabled={!hasVideo}
+              mode={mode}
+              videoFormat={videoFormat}
+              audioFormat={audioFormat}
+              quality={quality}
+              onAddToQueue={handleAddToQueue}
+            />
           </div>
         </div>
+
+        {/* ── Queue ──────────────────────────────────────────────────────── */}
+        <QueuePanel
+          items={queue}
+          isRunning={isRunning}
+          onRemove={removeFromQueue}
+          onClearDone={clearDone}
+          onDownloadAll={downloadAll}
+        />
+
+        {/* ── History ────────────────────────────────────────────────────── */}
+        <HistoryPanel
+          history={history}
+          onRemove={removeEntry}
+          onClear={clearHistory}
+          onReDownload={(item) => reDownload(item, addToQueue)}
+        />
+
       </main>
     </div>
   );
